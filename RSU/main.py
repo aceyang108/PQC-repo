@@ -45,32 +45,43 @@ def receive_data(sock):
                 payload = parse.parse_packet(packet)  # 將重組後的訊息轉回位元組並解析
 
                 if payload:
-                    print(f"\n[來自 {addr}] 驗證成功，切換緊急綠燈！")
-                    print(f"總耗時：{time.time() - payload['full_timestamp']} 秒")
-                    print(f"\n完整訊息：")
-                    for key, value in payload.items():
-                        if key == 'coreData':
-                            print(f"{key}: ", end="{\n")
-                            for sub_key, sub_value in value.items():
-                                print(f"  {sub_key}: {sub_value}")
-                            print("}")
-                        else:
-                            print(f"{key}: {value}")
-                    print()
+                    latency = time.time() - payload['full_timestamp']
+                    print("\033[1;32m┌────────────────────────────────────────────────────────┐\033[0m")
+                    print("\033[1;32m│            [RSU 驗證成功 - 安全優先通行准許]             │\033[0m")
+                    print("\033[1;32m├────────────────────────────────────────────────────────┤\033[0m")
+                    print(f"\033[1;36m│ 來源車輛 ID  :\033[0m {payload.get('obu_id', 'Unknown'):<37} \033[1;32m│\033[0m")
+                    print(f"\033[1;36m│ 消息序號 ID  :\033[0m {payload.get('msgID', 0):<37} \033[1;32m│\033[0m")
+                    print(f"\033[1;36m│ 傳輸暨驗簽延遲:\033[0m {latency*1000:.2f} 毫秒 (ms){:<21} \033[1;32m│\033[0m")
+                    print("\033[1;32m├────────────────────────────────────────────────────────┤\033[0m")
+                    print("\033[1;32m│ \033[1;33m核心安全數據 (BSM Core Data):\033[0m                          \033[1;32m│\033[0m")
+                    core = payload.get('coreData', {})
+                    print(f"\033[1;32m│\033[0m   - 緯度 (Lat): {core.get('latitude', 0.0):<38} \033[1;32m│\033[0m")
+                    print(f"\033[1;32m│\033[0m   - 經度 (Lon): {core.get('longitude', 0.0):<38} \033[1;32m│\033[0m")
+                    print(f"\033[1;32m│\033[0m   - 車速 (Spd): {core.get('speed', 0.0):<5} km/h{:<28} \033[1;32m│\033[0m")
+                    print(f"\033[1;32m│\033[0m   - 航向 (Hdg): {core.get('heading', 0.0):<5} deg{:<29} \033[1;32m│\033[0m")
+                    print("\033[1;32m├────────────────────────────────────────────────────────┤\033[0m")
+                    print("\033[1;32m│ \033[1;35m【緊急控制動作】 ───> 🔴 號誌切換為 [緊急綠燈]!!! 🟢\033[0m   \033[1;32m│\033[0m")
+                    print("\033[1;32m└────────────────────────────────────────────────────────┘\033[0m\n")
                 else:
-                    print(f"[來自 {addr}] 驗證失敗，拒絕通行。\n")
+                    print("\033[1;31m┌────────────────────────────────────────────────────────┐\033[0m")
+                    print("\033[1;31m│            [RSU 驗證失敗 - 安全威脅拒絕通行]             │\033[0m")
+                    print("\033[1;31m├────────────────────────────────────────────────────────┤\033[0m")
+                    print(f"\033[1;31m│ 來源 IP 位址 :\033[0m {addr[0]:<37} \033[1;31m│\033[0m")
+                    print("\033[1;31m├────────────────────────────────────────────────────────┤\033[0m")
+                    print("\033[1;31m│ \033[1;33m【警報警告】 ───> ❌ 封包簽章偽造或憑證過期，拒絕通行！\033[0m \033[1;31m│\033[0m")
+                    print("\033[1;31m└────────────────────────────────────────────────────────┘\033[0m\n")
     except KeyboardInterrupt:
-        print("\nRSU 已手動關閉")
+        print("\n\033[1;31mRSU 已手動關閉\033[0m")
     finally:
         sock.close()
-
+ 
 if __name__ == "__main__":
     # 建立 UDP Socket
     # socket.AF_INET 代表使用 IPv4
     # socket.SOCK_DGRAM 代表使用 UDP 協議
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
+ 
     # 將 Socket 綁定到 IP 與 Port
     sock.bind((RSU_IP, RSU_PORT))
-    print(f"--- RSU 已啟動，正在監聽連接埠 {RSU_PORT} ---")
+    print(f"\033[1;36m--- RSU 已啟動，正在監聽連接埠 {RSU_PORT} (後量子防禦模式開啟) ---\033[0m")
     receive_data(sock)

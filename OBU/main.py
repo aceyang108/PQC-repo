@@ -4,7 +4,7 @@ from OBU.fragment import send_fragment
 
 # 配置參數
 OBU_ID = "AMB-217"  # 車輛 ID，最多8字元
-RSU_IP = "192.168.1.174" 
+RSU_IP = "127.0.0.1" 
 RSU_PORT = 5005
 FREQUENCY = 5  # 發送頻率 (秒)
 
@@ -53,6 +53,5 @@ def send_heartbeat():
 
 if __name__ == "__main__":
     with open("OBU/json/saved_RSU.json", "r") as f:
-        for key, val in json.load(f).items():
-            saved_RSU.append((val['IP'], val['PORT']))
+        saved_RSU = json.load(f)
     send_heartbeat()

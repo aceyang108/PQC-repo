@@ -1,47 +1,20 @@
-import struct, oqs, json
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import hashes
-from OBU.gen_payload import generate_bsm_payload
-from ctypes import create_string_buffer
+import struct
+import json
+from OBU.signature_oqs import master_sign
 
-# 封包格式：Payload長度(2) | Payload | 憑證 | ECC簽章長度(1) | PQC簽章長度(2) | ECC簽章 | PQC簽章
 def gen_packet(obu_id, known_RSU=False):
-    # 生成 Payload
-    payload = generate_bsm_payload(obu_id)
-    message = json.dumps(payload).encode('utf-8') # 將資料轉換為位元組格式
-
-    # 讀取 ECC 和 PQC 私鑰
-    with open(f"OBU/keys/{obu_id}_ecc_priv.key", "rb") as f:
-        ecc_priv_bytes = f.read()
-    ecc_priv = serialization.load_der_private_key(ecc_priv_bytes, password=None)
+    # Delegate to master_sign which respects the active mode (Pure Python, JIT, or liboqs)
+    packet, msg_len, cert_len, sig_len = master_sign(obu_id, known_RSU)
     
-    with open(f"OBU/keys/{obu_id}_pqc_priv.key", "rb") as f:
-        pqc_priv = f.read()
-
-    # 進行雙重簽章
-    ecc_sig = ecc_priv.sign(message, ec.ECDSA(hashes.SHA256()))  # ECC 簽章
-
-    sig_name = "ML-DSA-44" 
-    with oqs.Signature(sig_name) as signer:
-        
-        # 將讀出來的 bytes 導入引擎
-        signer.secret_key = create_string_buffer(pqc_priv, len(pqc_priv))
-        
-        # 現在可以開始簽名了
-        pqc_sig = signer.sign(message)
-
-    # 讀取憑證
-    if known_RSU:
-        with open(f"OBU/cert/{obu_id}_short_cert.bin", "rb") as f:
-            cert = f.read()
-    else:
-        with open(f"OBU/cert/{obu_id}_full_cert.bin", "rb") as f:
-            cert = f.read()
-
-    msg_len = struct.pack('!H', len(message))   # 訊息長度 (2 bytes)
-    sig_len = struct.pack('!BH', len(ecc_sig), len(pqc_sig))  # 簽章長度 (ECC 1 byte + PQC 2 bytes)
-    packet = msg_len + message + cert + sig_len + ecc_sig + pqc_sig    # 組合成完整封包
-    print(f"生成封包: \nPayload長度 = {len(message)} bytes\n憑證長度 = {len(cert)} bytes\nECC簽章長度 = {len(ecc_sig)} bytes\nPQC簽章長度 = {len(pqc_sig)} bytes\n")
+    print("\033[1;36m┌────────────────────────────────────────────────────────┐\033[0m")
+    print("\033[1;36m│            [OBU 封包包裝器 - 混合簽章安全傳輸]          │\033[0m")
+    print("\033[1;36m├────────────────────────────────────────────────────────┤\033[0m")
+    print(f"\033[1;33m│ 消息 Payload 長度:\033[0m {msg_len:<4} 位元組 (bytes){:<19} \033[1;36m│\033[0m")
+    print(f"\033[1;33m│ 隱式憑證長度     :\033[0m {cert_len:<4} 位元組 (bytes) [{'短憑證 (省85.5%)' if cert_len==49 else '完整註冊憑證':<14}] \033[1;36m│\033[0m")
+    print(f"\033[1;33m│ H-FSwA 簽章長度  :\033[0m {sig_len:<4} 位元組 (bytes) (選定後量子核心) \033[1;36m│\033[0m")
+    print(f"\033[1;33m│ 封包總體積大小   :\033[0m {len(packet):<4} 位元組 (bytes){:<19} \033[1;36m│\033[0m")
+    print("\033[1;36m├────────────────────────────────────────────────────────┤\033[0m")
+    print("\033[1;36m│ \033[1;32m【傳輸發送】 ───> 📡 廣播安全 BSM 封包中...            \033[1;36m│\033[0m")
+    print("\033[1;36m└────────────────────────────────────────────────────────┘\033[0m\n")
 
     return packet

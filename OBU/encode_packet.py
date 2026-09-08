@@ -5,7 +5,7 @@ from cryptography.hazmat.primitives import hashes
 from OBU.gen_payload import generate_bsm_payload
 from ctypes import create_string_buffer
 
-# 封包格式：Payload長度(2) | Payload | 憑證 | ECC簽章長度(1) | PQC簽章長度(2) | ECC簽章 | PQC簽章
+# 封包格式：Payload長度(2) | Payload | ECC簽章長度(1) | ECC簽章 | 憑證 | PQC簽章長度(2) | PQC簽章
 def gen_packet(obu_id, known_RSU=False):
     # 生成 Payload
     payload = generate_bsm_payload(obu_id)
@@ -39,9 +39,12 @@ def gen_packet(obu_id, known_RSU=False):
         with open(f"OBU/cert/{obu_id}_full_cert.bin", "rb") as f:
             cert = f.read()
 
-    msg_len = struct.pack('!H', len(message))   # 訊息長度 (2 bytes)
-    sig_len = struct.pack('!BH', len(ecc_sig), len(pqc_sig))  # 簽章長度 (ECC 1 byte + PQC 2 bytes)
-    packet = msg_len + message + cert + sig_len + ecc_sig + pqc_sig    # 組合成完整封包
-    print(f"生成封包: \nPayload長度 = {len(message)} bytes\n憑證長度 = {len(cert)} bytes\nECC簽章長度 = {len(ecc_sig)} bytes\nPQC簽章長度 = {len(pqc_sig)} bytes\n")
+    msg_len = struct.pack('!H', len(message))             # 訊息長度 (2 bytes)
+    ecc_sig_header = struct.pack('!B', len(ecc_sig))       # ECC 簽章長度 (1 byte)
+    pqc_sig_header = struct.pack('!H', len(pqc_sig))       # PQC 簽章長度 (2 bytes)
+
+    # 組合完整封包 (ECC簽章放在憑證前面，確保F1收到就能驗)
+    packet = msg_len + message + ecc_sig_header + ecc_sig + cert + pqc_sig_header + pqc_sig
+    print(f"生成封包: \nPayload長度 = {len(message)} bytes\nECC簽章長度 = {len(ecc_sig)} bytes\n憑證長度 = {len(cert)} bytes\nPQC簽章長度 = {len(pqc_sig)} bytes\n")
 
     return packet

@@ -14,10 +14,10 @@
 5. 輸入 Ctrl+C 可終止程式。
 
 ## RSU端
-1. 將CA的兩種公鑰放入 RSU/keys。
-2. 執行 RSU.main，接收封包切片。
-3. 設定 RSU.main 中的 RSU_IP, RSU_PORT。
-3. 輸入 Ctrl+C 可終止程式。
+1. 執行 RSU.setup，將CA的兩種公鑰放入 RSU/keys。
+2. 設定 RSU.main 中的 RSU_IP, RSU_PORT。
+3. 執行 RSU.main，接收封包切片。
+4. 輸入 Ctrl+C 可終止程式。
 
 # 注意事項
 * OBU.signature 目前沒用到，請無視。
@@ -28,9 +28,10 @@
 
 # 短期目標
 * 讓CA產生OBU憑證的過程能夠遠端完成，不必綁在同一裝置。
-    * CA可以安放在RSU端，或是其他第三方裝置。
-* OBU連線到一RSU時，記錄其IP, PORT。並且RSU端會將該OBU的公鑰存在本機。<br>
-若OBU向已記錄的RSU發送封包，省略自己的公鑰，並將OBU公鑰長度的欄位都設為0。<br>
-當RSU發現該欄位皆為0，便會嘗試讀取存在本機的OBU公鑰。<br>
-每當OBU執行OBU.setup產生新金鑰時，清除RSU的記錄。<br>
-此項正在測試中
+    * CA可以安放在RSU端，或是其他第三方裝置。<br>
+    * 已完成，待測試<br>
+
+* OBU連線到一RSU時，記錄其IP, PORT。並且RSU端會將該OBU的公鑰存在本機。(完成)<br>
+若OBU向已記錄的RSU發送封包，省略自己的公鑰，並將OBU公鑰長度的欄位都設為0。(完成)<br>
+當RSU發現該欄位皆為0，便會嘗試讀取存在本機的OBU公鑰。(完成)<br>
+每當OBU執行OBU.setup產生新金鑰時，清除RSU的記錄。(未完成，但已有覆蓋功能)<br>

@@ -6,12 +6,25 @@
 
 # 流程
 
-## OBU端
-1. 執行 CA.gen_keys，產生CA金鑰對，或是透過其他裝置取得金鑰對，放入 CA/keys。
-2. 執行 OBU.setup，產生OBU金鑰對，並向CA請求憑證（自動儲存在 OBU/cert/）。
-3. 設定 OBU.main 中的 OBU_ID, RSU_IP, RSU_PORT 及 FREQUENCY。
-4. 執行 OBU.main，向 RSU 持續發送封包。
-5. 輸入 Ctrl+C 可終止程式。
+## 初始化階段
+1. 在專案根目錄 (PQC-repo/) 建立名為 ".env" 的檔案
+2. 在 .env 設定參數：CA_IP, CA_PORT, RSU_IP, RSU_PORT
+3. CA端執行CA.gen_keys，產生金鑰對
+4. CA端執行 CA.listen，監聽來自 OBU 與 RSU 的請求。
+5. RSU端設定好CA_IP後執行 RSU.setup，請求CA公鑰。
+6. OBU端設定好CA_IP後執行 OBU.setup，命令列參數必須輸入車輛ID，請求憑證並產生金鑰對。
+
+### .env 檔範例：
+```
+CA_IP = "127.0.0.1"
+CA_PORT = 57217
+RSU_IP = "192.168.1.174" 
+RSU_PORT = 5005
+```
+
+## OBU端執行階段
+1. 執行 OBU.main，命令列參數輸入車輛ID(必填)及發送頻率(可選，預設5秒)，向 RSU 持續發送封包。
+2. 輸入 Ctrl+C 可終止程式。
 
 ## RSU端
 1. 執行 RSU.setup，將CA的兩種公鑰放入 RSU/keys。
@@ -21,10 +34,6 @@
 
 # 注意事項
 * OBU.signature 目前沒用到，請無視。
-* 目前OBU跟CA必須放在同一台裝置。
-* RSU端則要確保自己擁有的CA公鑰跟用來簽署OBU憑證使用的私鑰是同時產生的。
-* 可行的解決辦法像是在OBU端產生CA金鑰對並生成憑證，然後把OBU端產生的CA公鑰複製到RSU端的 CA/keys。
-* 若有多台OBU端，則要將同一組CA金鑰對複製到所有OBU端的 CA/keys 中。
 
 # 短期目標
 * 讓CA產生OBU憑證的過程能夠遠端完成，不必綁在同一裝置。

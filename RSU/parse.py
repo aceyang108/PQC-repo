@@ -9,6 +9,7 @@ PQC_SIG_NAME = "ML-DSA-44"
 # 純記憶體 LRU 快取：{ (obu_id, P_U_bytes): vk }
 # 容量上限設為 500 台車 (僅佔用約 150 KB RAM)，徹底消除內存耗竭 DoS
 MEMORY_KEY_CACHE = OrderedDict()
+PQC_PUB_CACHE = OrderedDict()
 MAX_CACHE_SIZE = 500
 
 def update_key_cache(cache_key, vk):
@@ -16,7 +17,14 @@ def update_key_cache(cache_key, vk):
     MEMORY_KEY_CACHE[cache_key] = vk
     MEMORY_KEY_CACHE.move_to_end(cache_key)
     if len(MEMORY_KEY_CACHE) > MAX_CACHE_SIZE:
-        MEMORY_KEY_CACHE.popitem(last=False) # 淘汰最久未活躍車輛
+        MEMORY_KEY_CACHE.popitem(last=False)
+
+def update_pqc_pub_cache(obu_id_raw, pqc_pub):
+    """記憶體快取車輛的 PQC 公鑰 (1312 bytes)"""
+    PQC_PUB_CACHE[obu_id_raw] = pqc_pub
+    PQC_PUB_CACHE.move_to_end(obu_id_raw)
+    if len(PQC_PUB_CACHE) > MAX_CACHE_SIZE:
+        PQC_PUB_CACHE.popitem(last=False)
 
 def parse_header(header_bytes):
     """Header (4 bytes)：序號(1) | 總分片數(1) | 訊息ID(2)"""
@@ -149,35 +157,34 @@ def parse_packet(packet):
         start = end
         end += 32
         pqc_pub_hash = packet[start:end]
-        start = end
-        end += 2
-        ca_pqc_sig_len = int(struct.unpack('!H', packet[start:end])[0])
-        start = end
-        end += ca_pqc_sig_len
-        ca_pqc_sig = packet[start:end]
-
-        # 提取 OBU 的完整 PQC 公鑰
+        # 提取 OBU 的 PQC 公鑰 (若 pqc_pub_len == 0 則為 Short 模式，由記憶體快取還原)
         start = end
         end += 2
         pqc_pub_len = int(struct.unpack('!H', packet[start:end])[0])
-        start = end
-        end += pqc_pub_len
-        obu_pqc_pub = packet[start:end]
+        
+        if pqc_pub_len == 0:
+            # 二次通訊 (Short 模式)：從記憶體快取還原 PQC 公鑰
+            if obu_id_raw in PQC_PUB_CACHE:
+                obu_pqc_pub = PQC_PUB_CACHE[obu_id_raw]
+                PQC_PUB_CACHE.move_to_end(obu_id_raw)
+            else:
+                print(f"收到 Short 封包但記憶體查無快取公鑰 (車輛: {obu_id_str})，等待下一包 Full 封包自癒")
+                return None
+        else:
+            # 首次通訊 (Full 模式)：接收完整 1312B 公鑰
+            start = end
+            end += pqc_pub_len
+            obu_pqc_pub = packet[start:end]
 
-        # 雜湊綁定檢查
-        if hashlib.sha256(obu_pqc_pub).digest() != pqc_pub_hash:
-            print(f"PQC 公鑰雜湊不符，疑似偽造公鑰攻擊！(車輛: {obu_id_str})")
-            return None
-        # 驗證 CA 的 PQC 簽章
-        entangled_data = obu_id_raw + P_U_bytes + pqc_pub_hash
-        with open("RSU/keys/ca_pqc_pub.key", "rb") as f:
-            ca_pqc_pub = f.read()
-        with oqs.Signature(PQC_SIG_NAME) as verifier:
-            if not verifier.verify(entangled_data, ca_pqc_sig, ca_pqc_pub):
-                print(f"CA 後量子憑證簽章驗證失敗 (車輛: {obu_id_str})")
+            # 1. 雜湊綁定檢查 (防 DoS 注入攻擊)：檢查完整公鑰是否吻合 F1 裡的 pqc_pub_hash
+            if hashlib.sha256(obu_pqc_pub).digest() != pqc_pub_hash:
+                print(f"PQC 公鑰雜湊不符，疑似偽造公鑰攻擊！(車輛: {obu_id_str})")
                 return None
 
-        # 提取 OBU 的 PQC 簽章
+            # 驗證通過，安全存入記憶體快取 (Verify-then-Cache)
+            update_pqc_pub_cache(obu_id_raw, obu_pqc_pub)
+
+        # 2. 提取 OBU 的 PQC 簽章
         start = end
         end += 2
         obu_pqc_sig_len = int(struct.unpack('!H', packet[start:end])[0])
@@ -185,10 +192,10 @@ def parse_packet(packet):
         end += obu_pqc_sig_len
         obu_pqc_sig = packet[start:end]
 
-        # 驗證 OBU 的 PQC 簽章
+        # 3. 驗證 OBU 的 PQC 簽章 (ML-DSA-44 抗量子安全)
         with oqs.Signature(PQC_SIG_NAME) as verifier:
             if not verifier.verify(payload_bytes, obu_pqc_sig, obu_pqc_pub):
-                print(f"OBU 後量子簽章驗證失敗 (車輛: {obu_id_str})")
+                print(f"OBU 後量子簽章驗證失敗！(車輛: {obu_id_str})")
                 return None
 
         # 驗證 OBU 的 ECC 簽章

@@ -20,30 +20,33 @@ def gen_packet(obu_id, known_RSU=False):
         signer.secret_key = create_string_buffer(pqc_priv, len(pqc_priv))
         pqc_sig = signer.sign(message)
 
-    # 4. 讀取 ECQV 憑證
+    # 4. 讀取精簡 ECQV 憑證：P_U (33B) | pqc_pub_len (2B) | pqc_pub (1312B)
     with open(f"OBU/cert/{obu_id}_cert.bin", "rb") as f:
         cert_data = f.read()
+
     P_U_bytes = cert_data[:33]
     pqc_pub_len = struct.unpack('!H', cert_data[33:35])[0]
     obu_pqc_pub = cert_data[35 : 35 + pqc_pub_len]
-    ca_pqc_sig_len = struct.unpack('!H', cert_data[35 + pqc_pub_len : 37 + pqc_pub_len])[0]
-    ca_pqc_sig = cert_data[37 + pqc_pub_len : 37 + pqc_pub_len + ca_pqc_sig_len]
-    pqc_pub_hash = hashlib.sha256(obu_pqc_pub).digest() # 計算 PQC 公鑰雜湊
-    # 5. 組裝完整封包
+
+    # 計算 PQC 公鑰雜湊 (32 Bytes)，供 F1 輕量驗證與防 DoS 注入
+    pqc_pub_hash = hashlib.sha256(obu_pqc_pub).digest()
+
+    # 5. 組裝完整輕量封包
     obu_id_raw = struct.pack('!8s', obu_id.encode('utf-8'))
     header_part = struct.pack('!H', len(message)) + message
     ecc_part = struct.pack('!B', len(ecc_sig)) + ecc_sig
-    ecqv_cert_part = (
-        obu_id_raw + 
-        P_U_bytes + 
-        pqc_pub_hash +
-        struct.pack('!H', len(ca_pqc_sig)) + ca_pqc_sig
-    )
-    pqc_pub_part = struct.pack('!H', len(obu_pqc_pub)) + obu_pqc_pub
+    ecqv_id_part = obu_id_raw + P_U_bytes + pqc_pub_hash
+    
+    # 若為已知 RSU (known_RSU=True)，省略 1312 Bytes 的 PQC 公鑰本體！
+    if known_RSU:
+        pqc_pub_part = struct.pack('!H', 0) # 長度標頭為 0，不帶公鑰本體
+        mode_str = "Short 二次極速模式 (省略 1.3KB 公鑰)"
+    else:
+        pqc_pub_part = struct.pack('!H', len(obu_pqc_pub)) + obu_pqc_pub
+        mode_str = "Full 首次建聯模式 (帶完整公鑰)"
+
     pqc_sig_part = struct.pack('!H', len(pqc_sig)) + pqc_sig
+    packet = header_part + ecc_part + ecqv_id_part + pqc_pub_part + pqc_sig_part
 
-    packet = header_part + ecc_part + ecqv_cert_part + pqc_pub_part + pqc_sig_part
-
-    # 方便量化
-    print(f"生成 ECQV 混合封包: \nPayload長度 = {len(message)} bytes\nECC簽章長度 = {len(ecc_sig)} bytes\nP_U重構點 = {len(P_U_bytes)} bytes\nPQC公鑰長度 = {len(obu_pqc_pub)} bytes\nPQC簽章長度 = {len(pqc_sig)} bytes\n總封包長度 = {len(packet)} bytes\n")
+    print(f"生成純粹 ECQV 輕量封包 [{mode_str}]: \nPayload長度 = {len(message)} bytes\nECC簽章長度 = {len(ecc_sig)} bytes\nP_U重構點 = {len(P_U_bytes)} bytes\nPQC公鑰長度 = {0 if known_RSU else len(obu_pqc_pub)} bytes\nPQC簽章長度 = {len(pqc_sig)} bytes\n總封包長度 = {len(packet)} bytes\n")
     return packet

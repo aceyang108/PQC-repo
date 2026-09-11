@@ -111,28 +111,25 @@ def setup(obu_id="AMB-217"):
         print("憑證請求失敗！請確認 CA 伺服器是否已啟動 (python3 -m CA.listen)")
         return False
 
-    # 4. 解析 CA 回應：P_U (33B) | r (32B) | sig_len (2B) | ca_pqc_sig
+    # 4. 解析 CA 回應：P_U (33B) | r (32B) -> 總共僅 65 bytes
     P_U_bytes = response[:33]
     r_bytes = response[33:65]
-    sig_len = struct.unpack("!H", response[65:67])[0]
-    ca_pqc_sig = response[67 : 67 + sig_len]
     r_int = int.from_bytes(r_bytes, byteorder='big')
 
     # 5. 推導本地真正的 ECC 私鑰 d_U
     d_U = obu_derive_key(obu_id_bytes, P_U_bytes, obu_pqc_pub, r_int, k_U)
     obu_ecc_sk = SigningKey.from_secret_exponent(d_U, curve=NIST256p)
 
-    # 儲存私鑰 (DER 與 PEM 雙格式，便於各種庫載入)
     with open(f"OBU/keys/{obu_id}_ecc_priv.key", "wb") as f:
         f.write(obu_ecc_sk.to_der())
 
-    # 6. 打包並儲存 ECQV 憑證：P_U (33B) | PQC公鑰長度 (2B) | PQC公鑰 | CA_PQC簽章長度 (2B) | CA_PQC簽章
-    # 相比舊版 4KB 的憑證，這張 ECQV 憑證體積大幅縮小！
-    ecqv_cert = struct.pack('!33sH', P_U_bytes, len(obu_pqc_pub)) + obu_pqc_pub + struct.pack('!H', sig_len) + ca_pqc_sig
+    # 6. 打包並儲存純粹 ECQV 憑證：P_U (33B) | PQC公鑰長度 (2B) | PQC公鑰 (1312B)
+    # 總體積僅 1347 bytes (相較舊版 4KB，大幅精簡！)
+    ecqv_cert = struct.pack('!33sH', P_U_bytes, len(obu_pqc_pub)) + obu_pqc_pub
     with open(f"OBU/cert/{obu_id}_cert.bin", "wb") as f:
         f.write(ecqv_cert)
 
-    print(f"[{obu_id}] ECQV 憑證註冊成功！私鑰與憑證已儲存完畢。")
+    print(f"[{obu_id}] 純粹 ECQV 憑證註冊成功！私鑰與精簡憑證已儲存完畢。")
     return True
 
 if __name__ == "__main__":

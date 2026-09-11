@@ -62,14 +62,25 @@ def reconstruct_obu_pubkey(obu_id_bytes: bytes, P_U_bytes: bytes, pqc_pub_hash: 
 
 def verify_f1_ecc(f1_chunk):
     """
-    從 F1 碎片中提取 BSM 訊息與 ECC 簽章並進行快速驗證 (ECQV 重構)
+    從 F1 碎片中提取分片承諾雜湊清單、BSM 訊息與 ECC 簽章並進行快速驗證
     F1 佈局：
+      num_hashes (1B) | [H_2 (32B)] | [H_3 (32B)]... |
       msg_len (2B) | msg | ecc_sig_len (1B) | ecc_sig | ID (8B) | P_U (33B) | pqc_pub_hash (32B)
-    總體積僅約 200~300 bytes，絕不超過 UDP MTU！
     """
     try:
-        end = 2
-        msg_len = int(struct.unpack('!H', f1_chunk[:end])[0])
+        # 1. 提取後續分片雜湊承諾 (Fragment Commitment)
+        start = 0
+        num_hashes = int(struct.unpack('!B', f1_chunk[:1])[0])
+        start += 1
+        expected_hashes = {}
+        for idx in range(num_hashes):
+            seq = idx + 2
+            expected_hashes[seq] = f1_chunk[start : start + 32]
+            start += 32
+
+        # 2. 提取 Payload
+        end = start + 2
+        msg_len = int(struct.unpack('!H', f1_chunk[start:end])[0])
         start = end
         end += msg_len
         payload_bytes = f1_chunk[start:end]
@@ -107,21 +118,25 @@ def verify_f1_ecc(f1_chunk):
 
         # 先驗證簽章！
         if not vk.verify(ecc_sig, payload_bytes, hashfunc=hashlib.sha256):
-            return False, obu_id_str, None
+            return False, obu_id_str, None, None, None
 
         # 3. 簽章通過才安全寫入
         update_key_cache(cache_key, vk)
 
-        # 檢查時間戳防 (150ms)
+        # 檢查時間戳防重放攻擊 (150ms)
         f1_data = json.loads(payload_bytes.decode('utf-8'))
         f1_latency = time.time() - f1_data.get("full_timestamp", 0)
         if f1_latency > 0.15:
             print(f"F1 訊息已過期 (延遲 {f1_latency*1000:.1f}ms > 150ms)，疑似重放攻擊")
-            return False, obu_id_str, None
-        return True, obu_id_str, payload_bytes
+            return False, obu_id_str, None, None, None
+
+        # raw_f1_data 為扣除開頭承諾標頭後的純粹分片資料 (供後續組裝)
+        raw_f1_data = f1_chunk[1 + num_hashes * 32 :]
+        return True, obu_id_str, payload_bytes, expected_hashes, raw_f1_data
+
     except Exception as e:
         print(f"F1 ECC 簽章驗證失敗：{e}")
-        return False, None, None
+        return False, None, None, None, None
 
 def parse_packet(packet):
     """

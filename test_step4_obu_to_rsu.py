@@ -34,9 +34,11 @@ def run_test():
     print(f"  -> Full 封包總長度 = {len(full_packet)} bytes (預期約 4214 bytes)")
     assert 4100 <= len(full_packet) <= 4300, "Full 封包大小不符預期！"
 
-    # 驗證 F1 (前 1400 bytes)
-    f1_chunk = full_packet[:1400]
-    ok_f1, f1_id, _ = verify_f1_ecc(f1_chunk)
+    # 驗證 F1 (第一片，含分片承諾)
+    from OBU.fragment import make_fragments
+    frags_full = make_fragments(full_packet)
+    f1_chunk = frags_full[0][4:] # 扣除 4-byte UDP header
+    ok_f1, f1_id, *_ = verify_f1_ecc(f1_chunk)
     assert ok_f1, "【錯誤】Full 模式 F1 預驗證失敗！"
     print(f"  -> [PASS] F1 預驗證成功！(車輛: {f1_id})")
 
@@ -54,8 +56,9 @@ def run_test():
     assert 2800 <= len(short_packet) <= 3000, "Short 封包大小不符預期！"
 
     # 驗證 Short 模式下的 F1 (記憶體命中)
-    short_f1_chunk = short_packet[:1400]
-    ok_short_f1, short_f1_id, _ = verify_f1_ecc(short_f1_chunk)
+    frags_short = make_fragments(short_packet)
+    short_f1_chunk = frags_short[0][4:]
+    ok_short_f1, short_f1_id, *_ = verify_f1_ecc(short_f1_chunk)
     assert ok_short_f1, "【錯誤】Short 模式 F1 預驗證失敗！"
     print(f"  -> [PASS] Short 模式 F1 預驗證成功 (記憶體 LRU 0ns 秒殺)！")
 

@@ -67,35 +67,68 @@ def process_fragment(data, addr):
     if session_key in recent_completed:
         return
 
-    # 初始化
+    # 多車暫存池上限保護 (上限 100 台並發車輛，約 400KB 記憶體)
     if session_key not in reassemble_buffer:
+        if len(reassemble_buffer) >= 100:
+            # 若暫存池已滿，剔除最舊的一筆會話，保障系統不崩潰
+            oldest_key = min(reassemble_buffer.keys(), key=lambda k: reassemble_buffer[k]["created_at"])
+            del reassemble_buffer[oldest_key]
+
         reassemble_buffer[session_key] = {
             "state": "WAITING_F1",
             "start_time": None,
             "total_frags": total_frags,
             "fragments": [None] * total_frags,
+            "expected_hashes": None, # 儲存 F1 承諾的 {seq: hash} 清單
             "created_at": time.time()
         }
     session = reassemble_buffer[session_key]
 
-    # 收到 F1 先驗證 ECC，通過後進入閃黃燈並計時
+    # 1. 收到 F1 碎片 (首分片)
     if seq_num == 1:
         if session["start_time"] is None:
-            f1_valid, obu_id_str, _ = parse.verify_f1_ecc(chunk_bytes)
+            f1_valid, obu_id_str, _, exp_hashes, raw_f1 = parse.verify_f1_ecc(chunk_bytes)
             if f1_valid:
                 session["start_time"] = time.time()
                 session["state"] = "REASSEMBLING"
+                session["expected_hashes"] = exp_hashes
+                session["fragments"][0] = raw_f1 # 儲存純粹分片內容
                 print(f"[來自 {addr}] 車輛 {obu_id_str} F1 ECC 驗證通過，進入預備放行 (閃黃燈)，啟動 {PRUNING_TIMEOUT*1000:.0f}ms 計時器")
+
+                # 【UDP 亂序自癒】：回溯檢查在 F1 之前就先到達並暫存的後續分片
+                import hashlib
+                for s_idx in range(1, total_frags):
+                    frag_data = session["fragments"][s_idx]
+                    if frag_data is not None and s_idx + 1 in exp_hashes:
+                        calc_h = hashlib.sha256(frag_data).digest()
+                        if calc_h != exp_hashes[s_idx + 1]:
+                            print(f"[防 DoS 注入攔截] 先前暫存之分片 {s_idx+1} 雜湊不符！清除惡意會話！")
+                            del reassemble_buffer[session_key]
+                            return
             else:
                 print(f"[來自 {addr}] F1 ECC 驗證失敗，拒絕閃黃燈，清除暫存")
                 del reassemble_buffer[session_key]
                 return
         else:
-            print(f"[來自 {addr}] 收到重複 F1 備用包，自動忽略")
             return
 
+    # 2. 收到後續分片 (F2, F3...)
+    else:
+        # 【即時防 DoS 注入攔截 (Early-Drop)】：
+        # 若 F1 已先到達，在 0.5 微秒內立即計算 SHA-256 比對！
+        if session["expected_hashes"] is not None:
+            import hashlib
+            expected_h = session["expected_hashes"].get(seq_num)
+            if expected_h is not None:
+                calc_h = hashlib.sha256(chunk_bytes).digest()
+                if calc_h != expected_h:
+                    print(f"\n[防 DoS 注入攔截] 檢測到來自 {addr} 的偽造分片 ({seq_num}/{total_frags})！雜湊不符，0.5μs 立即丟棄！")
+                    return # 直接丟棄垃圾分片，不佔用任何 CPU 與重組緩衝區！
+
+        # 檢驗通過 (或 F1 尚未到達先暫存)，存入緩衝區
+        session["fragments"][seq_num - 1] = chunk_bytes
+
     print(f"[來自 {addr}] 收到ID為 {msg_id} 的分片 ({seq_num}/{total_frags})。")
-    session["fragments"][seq_num - 1] = chunk_bytes #Store
 
     # 檢查是否收齊
     if all(fragment is not None for fragment in session["fragments"]):

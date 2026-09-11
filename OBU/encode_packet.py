@@ -1,50 +1,49 @@
-import struct, oqs, json
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import hashes
+import struct, oqs, json, hashlib
+from ecdsa import SigningKey, NIST256p
 from OBU.gen_payload import generate_bsm_payload
 from ctypes import create_string_buffer
 
-# 封包格式：Payload長度(2) | Payload | ECC簽章長度(1) | ECC簽章 | 憑證 | PQC簽章長度(2) | PQC簽章
 def gen_packet(obu_id, known_RSU=False):
-    # 生成 Payload
+    # 1. 生成 BSM Payload
     payload = generate_bsm_payload(obu_id)
-    message = json.dumps(payload).encode('utf-8') # 將資料轉換為位元組格式
+    message = json.dumps(payload).encode('utf-8')
 
-    # 讀取 ECC 和 PQC 私鑰
+    # 2. 讀取 ECC 推導私鑰並進行簽章
     with open(f"OBU/keys/{obu_id}_ecc_priv.key", "rb") as f:
-        ecc_priv_bytes = f.read()
-    ecc_priv = serialization.load_der_private_key(ecc_priv_bytes, password=None)
-    
+        ecc_sk = SigningKey.from_der(f.read())
+    ecc_sig = ecc_sk.sign(message, hashfunc=hashlib.sha256)
+
+    # 3. 讀取 PQC 私鑰並進行 ML-DSA-44 簽章
     with open(f"OBU/keys/{obu_id}_pqc_priv.key", "rb") as f:
         pqc_priv = f.read()
-
-    # 進行雙重簽章
-    ecc_sig = ecc_priv.sign(message, ec.ECDSA(hashes.SHA256()))  # ECC 簽章
-
-    sig_name = "ML-DSA-44" 
-    with oqs.Signature(sig_name) as signer:
-        
-        # 將讀出來的 bytes 導入引擎
+    with oqs.Signature("ML-DSA-44") as signer:
         signer.secret_key = create_string_buffer(pqc_priv, len(pqc_priv))
-        
-        # 現在可以開始簽名了
         pqc_sig = signer.sign(message)
 
-    # 讀取憑證
-    if known_RSU:
-        with open(f"OBU/cert/{obu_id}_short_cert.bin", "rb") as f:
-            cert = f.read()
-    else:
-        with open(f"OBU/cert/{obu_id}_full_cert.bin", "rb") as f:
-            cert = f.read()
+    # 4. 讀取 ECQV 憑證
+    with open(f"OBU/cert/{obu_id}_cert.bin", "rb") as f:
+        cert_data = f.read()
+    P_U_bytes = cert_data[:33]
+    pqc_pub_len = struct.unpack('!H', cert_data[33:35])[0]
+    obu_pqc_pub = cert_data[35 : 35 + pqc_pub_len]
+    ca_pqc_sig_len = struct.unpack('!H', cert_data[35 + pqc_pub_len : 37 + pqc_pub_len])[0]
+    ca_pqc_sig = cert_data[37 + pqc_pub_len : 37 + pqc_pub_len + ca_pqc_sig_len]
+    pqc_pub_hash = hashlib.sha256(obu_pqc_pub).digest() # 計算 PQC 公鑰雜湊
+    # 5. 組裝完整封包
+    obu_id_raw = struct.pack('!8s', obu_id.encode('utf-8'))
+    header_part = struct.pack('!H', len(message)) + message
+    ecc_part = struct.pack('!B', len(ecc_sig)) + ecc_sig
+    ecqv_cert_part = (
+        obu_id_raw + 
+        P_U_bytes + 
+        pqc_pub_hash +
+        struct.pack('!H', len(ca_pqc_sig)) + ca_pqc_sig
+    )
+    pqc_pub_part = struct.pack('!H', len(obu_pqc_pub)) + obu_pqc_pub
+    pqc_sig_part = struct.pack('!H', len(pqc_sig)) + pqc_sig
 
-    msg_len = struct.pack('!H', len(message))             # 訊息長度 (2 bytes)
-    ecc_sig_header = struct.pack('!B', len(ecc_sig))       # ECC 簽章長度 (1 byte)
-    pqc_sig_header = struct.pack('!H', len(pqc_sig))       # PQC 簽章長度 (2 bytes)
+    packet = header_part + ecc_part + ecqv_cert_part + pqc_pub_part + pqc_sig_part
 
-    # 組合完整封包 (ECC簽章放在憑證前面，確保F1收到就能驗)
-    packet = msg_len + message + ecc_sig_header + ecc_sig + cert + pqc_sig_header + pqc_sig
-    print(f"生成封包: \nPayload長度 = {len(message)} bytes\nECC簽章長度 = {len(ecc_sig)} bytes\n憑證長度 = {len(cert)} bytes\nPQC簽章長度 = {len(pqc_sig)} bytes\n")
-
+    # 方便量化
+    print(f"生成 ECQV 混合封包: \nPayload長度 = {len(message)} bytes\nECC簽章長度 = {len(ecc_sig)} bytes\nP_U重構點 = {len(P_U_bytes)} bytes\nPQC公鑰長度 = {len(obu_pqc_pub)} bytes\nPQC簽章長度 = {len(pqc_sig)} bytes\n總封包長度 = {len(packet)} bytes\n")
     return packet

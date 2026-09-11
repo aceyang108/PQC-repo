@@ -1,20 +1,40 @@
-import socket, time
+import socket, time, os
 import RSU.parse as parse
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    if os.path.exists(".env"):
+        with open(".env", "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
 # 核心配置參數
-RSU_IP = "0.0.0.0" 
-RSU_PORT = 5005
+RSU_IP = os.getenv("RSU_LISTEN_IP", "0.0.0.0") 
+RSU_PORT = int(os.getenv("RSU_PORT", 5005))
 BUFFER_SIZE = 4096
 PRUNING_TIMEOUT = 0.08 # 80 毫秒（配合 150ms 端到端延遲）
 SOCKET_TIMEOUT = 0.01   # 10 毫秒輪詢週期，Non-blocking
 
 # 重組緩衝區，key= (msg_id, addr)
-# value 為 sessin dict: {"state": ..., "start_time": ..., "total_frags": ..., "fragments": [...], "created_at": ...}
+# value 為 session dict: {"state": ..., "start_time": ..., "total_frags": ..., "fragments": [...], "created_at": ...}
 reassemble_buffer = {}
+
+# 最近已完成重組的 (msg_id, addr)，避免尾巴重複分片再次觸發新 session
+recent_completed = {}
 
 # 定時檢查
 def prune_expired_sessions():
     now = time.time()
+    # 清理超過 2 秒的已完成紀錄
+    for key, done_time in list(recent_completed.items()):
+        if now - done_time > 2.0:
+            del recent_completed[key]
+
     pruned_keys = []
     for key, session in list(reassemble_buffer.items()):
         # 若 F1 已抵達，以 F1 抵達時間倒數 80ms
@@ -41,11 +61,13 @@ def process_fragment(data, addr):
         print(f"[來自 {addr}] 收到無效的 header")
         return
 
-
-
-
     session_key = (msg_id, addr)
-    #初始化
+
+    # 若該訊息剛重組完成，忽略後續抵達的重複分片 (如尾巴備用 F1)
+    if session_key in recent_completed:
+        return
+
+    # 初始化
     if session_key not in reassemble_buffer:
         reassemble_buffer[session_key] = {
             "state": "WAITING_F1",
@@ -81,6 +103,7 @@ def process_fragment(data, addr):
         print(f"[來自 {addr}] 已收齊 ID為 {msg_id} 的所有分片 ({elapsed_reassembly*1000:.2f}ms)")
         packet = b''.join(session["fragments"])
         del reassemble_buffer[session_key]
+        recent_completed[session_key] = time.time()
         # 密碼驗證
         payload = parse.parse_packet(packet)
         if payload:

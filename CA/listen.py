@@ -1,9 +1,18 @@
 import struct, os
 from socket import *
 from CA.sign import issue_obu_certificate
-from dotenv import load_dotenv
-
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # 若環境未安裝 python-dotenv，純 Python 自行解析 .env
+    if os.path.exists(".env"):
+        with open(".env", "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 CA_PORT = int(os.getenv("CA_PORT", 57217))
 BUF_SIZE = 4096 
@@ -52,19 +61,23 @@ def main():
         print(f"Connection from {addr} has been established.")
 
         id_code = struct.unpack('!B', recv_all(connectionSocket, 1))[0]
-        if id_code == 0x57:     # OBU
-            # | 識別碼 (1 byte) | OBU ID (8 bytes) | ECC公鑰長度 (1 byte) | PQC公鑰長度 (2 bytes) | -> 不含識別碼 11 bytes
-            req_header = recv_all(connectionSocket, 11)
-            obu_id_raw, obu_ecc_pub_len, obu_pqc_pub_len = struct.unpack('!8sBH', req_header)
-            obu_id = obu_id_raw.rstrip(b'\x00').decode('utf-8')
-            print(f"已接收到 OBU {obu_id} 的請求")
+        if id_code == 0x57:     # OBU ECQV 註冊請求
+            # Header: OBU ID (8 bytes) | PQC公鑰長度 (2 bytes) -> 共 10 bytes
+            req_header = recv_all(connectionSocket, 10)
+            obu_id_raw, obu_pqc_pub_len = struct.unpack('!8sH', req_header)
+            obu_id_str = obu_id_raw.rstrip(b'\x00').decode('utf-8')
+            print(f"已接收到 OBU {obu_id_str} 的 ECQV 註冊請求")
 
-            obu_ecc_pub = recv_all(connectionSocket, obu_ecc_pub_len)
+            # 接收 33 bytes 的 R_U 請求點與 PQC 公鑰本體
+            obu_R_U_bytes = recv_all(connectionSocket, 33)
             obu_pqc_pub = recv_all(connectionSocket, obu_pqc_pub_len)
 
-            cert = issue_obu_certificate(obu_id, obu_ecc_pub, obu_pqc_pub)
-            reply_header = struct.pack('!I', len(cert))
-            reply = cert
+            # 呼叫 ECQV 簽發與雜湊糾纏
+            from CA.enroll import ca_process_enrollment
+            cert_data = ca_process_enrollment(obu_id_raw, obu_R_U_bytes, obu_pqc_pub)
+
+            reply_header = struct.pack('!I', len(cert_data))
+            reply = cert_data
         elif id_code == 0x67:   # RSU，只傳識別碼
             print(f"已接收到 RSU 的請求")
             with open('CA/keys/ca_ecc_pub.key', 'rb') as f:
@@ -76,12 +89,13 @@ def main():
             reply = ca_ecc_pub + ca_pqc_pub
         else:
             print("Not OBU nor RSU, skipped.")
-            reply_header = None
-            reply = None
+            connectionSocket.close()
+            continue
 
         # Send certificate / pub keys back to OBU / RSU
         connectionSocket.sendall(reply_header + reply)
         print("Message sent")
+        connectionSocket.close()
 
     serverSocket.close()
 

@@ -1,4 +1,4 @@
-import socket, time, json
+import socket, time, json, os, argparse
 from OBU.encode_packet import gen_packet
 from OBU.fragment import send_fragment
 
@@ -10,37 +10,30 @@ FREQUENCY = 5  # 發送頻率 (秒)
 
 # 用計數器的方式取得ID
 current_msg_id = 0
-
-# 用於存儲已知 RSU 資訊，結構為 "IP:PORT": timestamp
 saved_RSU = {}
 
 def get_next_id():
     global current_msg_id
-    # 確保在 0~65535 之間循環
     current_msg_id = (current_msg_id + 1) % 65536
     return current_msg_id
 
-# 檢查RSU是否已知，並更新已知RSU列表
 def check_RSU():
     rsu_key = f"{RSU_IP}:{RSU_PORT}"
     if rsu_key in saved_RSU:
         return True
-
-    # 首次見到，記錄下來
     saved_RSU[rsu_key] = time.time()
     print(f"已記憶 RSU：{rsu_key}")
     return False
 
-# 建立 UDP Socket
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-def send_heartbeat():
+def send_heartbeat(obu_id, frequency):
+    print(f"--- OBU {obu_id} 啟動，目標 RSU {RSU_IP}:{RSU_PORT}，發送頻率: {frequency}s ---")
     try:
         while True:
-            packet = gen_packet(OBU_ID, check_RSU())  # 生成包含簽章的封包
-            send_fragment(sock, get_next_id(), packet, (RSU_IP, RSU_PORT))  # 發送分片
-            
-            time.sleep(FREQUENCY)   # 定時發送
+            packet = gen_packet(obu_id, check_RSU())
+            send_fragment(sock, get_next_id(), packet, (RSU_IP, RSU_PORT))
+            time.sleep(frequency)
     except KeyboardInterrupt:
         print("\nOBU 已停止發送")
     finally:
@@ -49,9 +42,15 @@ def send_heartbeat():
         sock.close()
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="OBU 緊急車輛廣播發送端")
+    parser.add_argument("obu_id", nargs="?", default="AMB-217", help="車輛 ID (預設: AMB-217)")
+    parser.add_argument("frequency", nargs="?", type=float, default=5.0, help="發送頻率 (秒，預設: 5.0)")
+    args = parser.parse_args()
+
     try:
         with open("OBU/json/saved_RSU.json", "r") as f:
-            saved_RSU = json.load(f) #No append
+            saved_RSU = json.load(f)
     except Exception:
         saved_RSU = {}
-    send_heartbeat()
+
+    send_heartbeat(args.obu_id, args.frequency)

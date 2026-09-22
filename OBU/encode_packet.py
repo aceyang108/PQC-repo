@@ -1,12 +1,12 @@
 import struct, oqs, json, hashlib
 from ecdsa import SigningKey, NIST256p
-from OBU.gen_payload import generate_bsm_payload
+from OBU.gen_payload import generate_srm_payload
 from ctypes import create_string_buffer
 
 def gen_packet(obu_id, known_RSU=False):
-    # 1. 生成 BSM Payload
-    payload = generate_bsm_payload(obu_id)
-    message = json.dumps(payload).encode('utf-8')
+    # 1. 生成符合 SAE J2735 SEP2024 的最小化 SRM (Signal Request Message) Payload
+    payload = generate_srm_payload(obu_id)
+    message = json.dumps(payload, separators=(',', ':')).encode('utf-8')
 
     # 2. 讀取 ECC 推導私鑰並進行簽章
     with open(f"OBU/keys/{obu_id}_ecc_priv.key", "rb") as f:

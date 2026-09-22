@@ -65,7 +65,11 @@ def run_test():
     # 驗證 Short 模式下的完整封包 (由 PQC_PUB_CACHE 還原公鑰)
     result_short = parse_packet(short_packet)
     assert result_short is not None, "【錯誤】Short 模式完整解析失敗！"
-    station_id = result_short.get("stationID") or result_short.get("obu_id")
+    station_id = (
+        result_short.get("requestor", {}).get("id", {}).get("entityID")
+        or result_short.get("stationID")
+        or result_short.get("obu_id")
+    )
     print(f"  -> [PASS] Short 模式完整驗證通過！車輛 ID: {station_id}")
 
     print("\n" + "=" * 60)

@@ -53,7 +53,7 @@ def prune_expired_sessions():
         del reassemble_buffer[key]
 
 # 處理收到的分片
-def process_fragment(data, addr):
+def process_fragment(data, addr, sock=None):
     header_bytes = data[:4]
     chunk_bytes = data[4:]
     seq_num, total_frags, msg_id = parse.parse_header(header_bytes) # Header (4 bytes)：序號(1) | 總分片數(1) | 訊息ID(2)
@@ -151,14 +151,44 @@ def process_fragment(data, addr):
             print(f"[Pre-warming] 向鄰近號誌發送預熱訊號")
             print(f"端到端總耗時：{total_latency:.4f} 秒")
             print(f"\n完整訊息：")
-            for key, value in payload.items():
-                if key == 'coreData':
-                    print(f"{key}: ", end="{\n")
-                    for sub_key, sub_value in value.items():
-                        print(f"  {sub_key}: {sub_value}")
-                    print("}")
-                else:
-                    print(f"{key}: {value}")
+            if payload.get("msgID") == 29:
+                req_pkg = payload.get("requests", [{}])[0].get("request", {})
+                requestor = payload.get("requestor", {})
+                req_id = requestor.get("id", {}).get("entityID")
+                role = requestor.get("type", {}).get("role")
+                pos = requestor.get("position", {})
+                inter_id = req_pkg.get('id', {}).get('id', 1)
+                approach_id = req_pkg.get('inBoundLane', {}).get('approach', 1)
+                req_num = req_pkg.get('requestID', 1)
+
+                print(f"  [SAE J2735 SRM 優先號誌請求]")
+                print(f"  車輛識別: {req_id} (角色代碼: {role}=Ambulance, 優先等級: {requestor.get('type', {}).get('request')})")
+                print(f"  目標路口: {inter_id}, 請求進口道 Approach: {approach_id}")
+                print(f"  座標: (Lat {pos.get('position', {}).get('lat')/1e7:.6f}, Lon {pos.get('position', {}).get('long')/1e7:.6f}), 速度: {pos.get('speed', {}).get('speed', 0)*0.02*3.6:.1f} km/h")
+
+                # 【發送 SAE J2735 SSM 綠燈核准 ACK 回條】
+                if sock is not None:
+                    import json
+                    from RSU.gen_payload import generate_ssm_payload
+                    ssm_payload = generate_ssm_payload(
+                        obu_id=req_id,
+                        intersection_id=inter_id,
+                        approach_id=approach_id,
+                        request_id=req_num,
+                        status=4 # 4 = granted (已核准放行)
+                    )
+                    ssm_bytes = json.dumps(ssm_payload, separators=(',', ':')).encode('utf-8')
+                    sock.sendto(ssm_bytes, addr)
+                    print(f"  -> 已向車輛 {req_id} 回傳 SAE J2735 SSM 放行回條 (ACK, {len(ssm_bytes)} bytes)")
+            else:
+                for key, value in payload.items():
+                    if key == 'coreData':
+                        print(f"{key}: ", end="{\n")
+                        for sub_key, sub_value in value.items():
+                            print(f"  {sub_key}: {sub_value}")
+                        print("}")
+                    else:
+                        print(f"{key}: {value}")
             print()
         else:
             print(f"\n驗證失敗，拒絕通行")
@@ -170,7 +200,7 @@ def receive_data(sock):
         while True:
             try:
                 data, addr = sock.recvfrom(BUFFER_SIZE)
-                process_fragment(data, addr)
+                process_fragment(data, addr, sock=sock)
             except socket.timeout:
                 pass  # 正常超時，繼續執行
             # 檢查是否有超時分片需要清理
